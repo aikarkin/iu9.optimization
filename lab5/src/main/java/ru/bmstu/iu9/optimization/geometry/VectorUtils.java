@@ -1,4 +1,4 @@
-package ru.bmstu.iu9.optimization.gemo;
+package ru.bmstu.iu9.optimization.geometry;
 
 import org.apache.commons.math3.linear.RealVector;
 

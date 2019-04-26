@@ -1,20 +1,21 @@
 package ru.bmstu.iu9.optimization.md.gpm;
 
-import org.apache.commons.math3.linear.*;
+import org.apache.commons.math3.linear.ArrayRealVector;
+import org.apache.commons.math3.linear.MatrixUtils;
+import org.apache.commons.math3.linear.RealMatrix;
+import org.apache.commons.math3.linear.RealVector;
 import ru.bmstu.iu9.optimization.conf.gpc.GradientProjectionConfig;
-import ru.bmstu.iu9.optimization.gemo.VectorUtils;
+import ru.bmstu.iu9.optimization.geometry.VectorUtils;
 import ru.bmstu.iu9.optimization.od.DichotomyMethod;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static java.lang.Math.*;
 
 public class GradientProjectionMethod {
 
-    // Configuration:
     private Function<RealVector, Double> objectiveFunc;
     private Function<RealVector, RealVector> gradient;
     private List<Function<RealVector, Double>> constraints;
@@ -36,37 +37,62 @@ public class GradientProjectionMethod {
 
     public RealVector optimize(RealVector x0) {
         RealVector x = new ArrayRealVector(x0);
-        boolean shouldCheckDeltaX;
+        RealVector vecDir;
+        double alphaOptimal;
 
         for (int k = 0; k < c.maxIterations(); k++) {
-            ActiveConstraintsParams activeConstraintsParams = findActiveConstraints(x);
-            x = activeConstraintsParams.x;
-            List<Integer> activeIdxes = activeConstraintsParams.indexes;
-            RealMatrix matA = buildMatAWithConstraints(activeIdxes, x);
-            RealVector lambda;
             RealVector gradF = gradient.apply(x);
-            shouldCheckDeltaX = !VectorUtils.elementsAreZero(gradF);
 
-            for (; ; ) {
-                if (shouldCheckDeltaX) {
-                    RealVector deltaX = calcDeltaX(matA, gradF);
-                    if (deltaX.getNorm() > c.eps2()) {
-                        double alpha = findOptimalAlphaSatisfyingConstraints(passiveConstraintsIdxes(activeIdxes), x, deltaX);
-                        x = x.add(deltaX.mapMultiply(alpha));
-                        break;
+            // если норма градиента стала слишком маленькой, выходим
+            if (gradF.getNorm() < c.eps2()) {
+                return x;
+            }
+
+            RealVector x1 = x;
+            double alphaExt = DichotomyMethod.dichotomyMethod(
+                    (alpha) -> objectiveFunc.apply(x1.subtract(gradF.mapMultiply(alpha))),
+                    0.0,
+                    c.alphaMax(),
+                    c.alphaPrecision()
+            );
+            double alphaConstr = findMaxAlphaSatisfyingConstraints(x, gradF.mapMultiply(-1));
+
+            // не вышли за границы, продолжаем движение в направлении антиградиента
+            if (alphaExt <= alphaConstr) {
+                alphaOptimal = alphaExt;
+                vecDir = gradF.mapMultiply(-1);
+            } else { // вышли за границу, проецируем градиент
+                // перескакиваем на границу
+                x = x.subtract(gradF.mapMultiply(alphaConstr));
+                // определяем активные в точке x ограничения
+                List<Integer> activeConstraintsIdxes = new ArrayList<>();
+                for (int i = 0; i < constraints.size(); i++) {
+                    Function<RealVector, Double> constr = constraints.get(i);
+                    if (constr.apply(x) <= 0) {
+                        activeConstraintsIdxes.add(i);
                     }
-                    shouldCheckDeltaX = true;
                 }
 
-                lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
-                        .multiply(matA)
-                        .operate(gradF)
-                        .mapMultiply(-1);
+                do {
+                    RealMatrix matA = buildMatAWithConstraints(activeConstraintsIdxes, x);
+                    vecDir = gradientProjection(matA, gradF);
 
+                    if (vecDir.getNorm() > c.eps2()) {
+                        break;
+                    }
 
-                if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
-                    return x;
-                } else {
+                    RealVector lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
+                            .multiply(matA)
+                            .operate(gradF)
+                            .mapMultiply(-1);
+
+                    // Все элементы больше либо равны нулю - Ура!
+                    // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
+                    if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
+                        return x;
+                    }
+
+                    // найдем индекс с минимальным лямбда
                     int minLambdaIdx = 0;
                     for (int i = 1; i < lambda.getDimension(); i++) {
                         if (lambda.getEntry(i) < lambda.getEntry(minLambdaIdx)) {
@@ -74,22 +100,27 @@ public class GradientProjectionMethod {
                         }
                     }
 
-                    activeIdxes.remove(minLambdaIdx);
+                    // удалим ограничение с найденным индексом из числа активных
+                    activeConstraintsIdxes.remove(minLambdaIdx);
+                } while (activeConstraintsIdxes.size() > 0);
 
-                    if (activeIdxes.size() == 0) {
-                        break;
-                    }
-
-                    matA = buildMatAWithConstraints(activeIdxes, x);
-                }
+                RealVector x2 = x;
+                alphaConstr = findMaxAlphaSatisfyingConstraints(x, gradient.apply(x).mapMultiply(-1));
+                alphaOptimal = DichotomyMethod.dichotomyMethod(
+                        (alpha) -> objectiveFunc.apply(x2.subtract(gradient.apply(x2).mapMultiply(alpha))),
+                        0.0,
+                        alphaConstr,
+                        c.alphaPrecision()
+                );
             }
 
+            x = x.add(vecDir.mapMultiply(alphaOptimal));
         }
 
         return x;
     }
 
-    private RealVector calcDeltaX(RealMatrix matA, RealVector gradF) {
+    private RealVector gradientProjection(RealMatrix matA, RealVector gradF) {
         RealMatrix identity = MatrixUtils.createRealIdentityMatrix(gradF.getDimension());
         return identity
                 .subtract(
@@ -103,97 +134,22 @@ public class GradientProjectionMethod {
                 .mapMultiply(-1);
     }
 
-    private List<Integer> passiveConstraintsIdxes(List<Integer> activeConstraints) {
-        Set<Integer> activeIdxesSet = new HashSet<>(activeConstraints);
-        return IntStream.range(0, constraints.size())
-                .filter(i -> !activeIdxesSet.contains(i))
-                .boxed()
-                .collect(Collectors.toList());
-    }
-
-    private ActiveConstraintsParams findActiveConstraints(RealVector x0) {
-        List<Integer> activeIdxes = new ArrayList<>();
-        int n = x0.getDimension(), m = constraints.size();
-        boolean hasActiveConstraints;
-        RealVector x = x0;
-        RealVector vecTau;
-        RealMatrix matA;
-
-        for (; ; ) {
-            hasActiveConstraints = false;
-
-            // находим значения ограничений в точке x
-            final RealVector xFinal = x;
-            List<Double> constraintsValues = constraints
-                    .stream()
-                    .map(func -> func.apply(xFinal))
-                    .collect(Collectors.toList());
-
-            for (int i = 0; i < m; i++) {
-                if (constraintsValues.get(i) >= c.eps1()) {
-                    activeIdxes.add(i);
-                    hasActiveConstraints = true;
-                }
-            }
-
-
-            if (hasActiveConstraints) {
-                activeIdxes.sort(Comparator.comparingDouble(i -> abs(constraintsValues.get(i))));
-                activeIdxes = activeIdxes.subList(0, min(n, activeIdxes.size()));
-                break;
-            }
-
-            for (int i = 0; i < m; i++) {
-                activeIdxes.add(i);
-            }
-            activeIdxes.sort(Comparator.comparingDouble(i -> abs(constraintsValues.get(i))));
-            activeIdxes = activeIdxes.subList(0, n);
-
-            vecTau = new ArrayRealVector(n);
-            for (int i = 0; i < n; i++) {
-                vecTau.setEntry(i, -constraintsValues.get(activeIdxes.get(i)));
-            }
-
-            matA = buildMatAWithConstraints(activeIdxes, x);
-
-            x = x.add(
-                    matA.transpose()
-                            .multiply(
-                                    MatrixUtils.inverse(matA.multiply(matA.transpose()))
-                            ).operate(vecTau)
-            );
-
-        }
-
-        return new ActiveConstraintsParams(x, activeIdxes);
-    }
-
-    private double findOptimalAlphaSatisfyingConstraints(List<Integer> constraintsIdxes, RealVector x0, RealVector d) {
-        double maxAlpha = findMaxAlphaSatisfyingConstraints(constraintsIdxes, x0, d);
-        return DichotomyMethod.dichotomyMethod(
-                (alpha) -> objectiveFunc.apply(x0.add(d.mapMultiply(alpha))),
-                0.0,
-                maxAlpha,
-                c.alphaPrecision()
-        );
-    }
-
-    private double findMaxAlphaSatisfyingConstraints(List<Integer> constraintIndexes, RealVector x0, RealVector d) {
+    private double findMaxAlphaSatisfyingConstraints(RealVector x0, RealVector d) {
         double alpha = c.alpha0(), alphaPrev;
 
         RealVector x = x0.add(d.mapMultiply(alpha));
 
-        if (satisfiesConstraints(constraintIndexes, x) > 0) {
+        if (satisfiesConstraints(x) > 0) {
             do {
                 x = x0.add(d.mapMultiply(alpha));
                 alpha *= 2.0;
-            } while (satisfiesConstraints(constraintIndexes, x) > 0);
+            } while (satisfiesConstraints(x) > 0);
             alphaPrev = alpha / 4.0;
         } else {
             do {
                 x = x0.add(d.mapMultiply(alpha));
                 alpha /= 2.0;
-            } while (satisfiesConstraints(constraintIndexes, x) < 0);
+            } while (satisfiesConstraints(x) < 0);
             alphaPrev = 4.0 * alpha;
         }
 
@@ -201,10 +157,7 @@ public class GradientProjectionMethod {
 
         while (abs(minAlpha - maxAlpha) > c.alphaPrecision()) {
             double mid = (minAlpha + maxAlpha) / 2.0;
-            if (
-                    satisfiesConstraints(constraintIndexes, x0.add(d.mapMultiply(minAlpha)))
-                            * satisfiesConstraints(constraintIndexes, x0.add(d.mapMultiply(mid))) < 0
-            ) {
+            if (satisfiesConstraints(x0.add(d.mapMultiply(minAlpha))) * satisfiesConstraints(x0.add(d.mapMultiply(mid))) < 0) {
                 maxAlpha = mid;
             } else {
                 minAlpha = mid;
@@ -224,23 +177,10 @@ public class GradientProjectionMethod {
         return matA;
     }
 
-    private int satisfiesConstraints(List<Integer> activeIdxes, RealVector x) {
-        return activeIdxes
-                .stream()
-                .map(i -> constraints.get(i).apply(x))
+    private int satisfiesConstraints(RealVector x) {
+        return constraints.stream()
+                .map(g -> g.apply(x))
                 .allMatch(val -> val <= 0) ? 1 : -1;
-    }
-
-    private static class ActiveConstraintsParams {
-
-        RealVector x;
-        List<Integer> indexes;
-
-        ActiveConstraintsParams(RealVector x, List<Integer> indexes) {
-            this.x = x;
-            this.indexes = indexes;
-        }
-
     }
 
 }
