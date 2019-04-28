@@ -39,65 +39,64 @@ public class GradientProjectionMethod {
         RealVector x = new ArrayRealVector(x0);
         RealVector vecDir = null;
         boolean shouldUseGradDir;
+        int k;
 
-        for (int k = 0; k < c.maxIterations(); k++) {
+        for (k = 0; k < c.maxIterations(); k++) {
             RealVector gradF = gradient.apply(x);
-            shouldUseGradDir = false;
+            shouldUseGradDir = true;
 
             // если норма градиента стала слишком маленькой, выходим
-            if (gradF.getNorm() < c.eps2()) {
+            if ((gradF.getNorm() < c.eps2())) {
                 return x;
             }
+
+            gradF.unitize();
 
             List<Integer> activeConstraintsIdxes = getActiveConstraints(x);
 
             // Попали на границу
-            if (activeConstraintsIdxes.size() > 0) {
+            // антиградиент направлен за пределы допустимой области, проецируем градиент
+            if (activeConstraintsIdxes.size() > 0 && satisfiesConstraints(x.subtract(gradF)) < 0) {
                 RealMatrix matA = buildMatAWithConstraints(activeConstraintsIdxes, x);
-                RealVector vecU = matA.operate(gradF.mapMultiply(-1));
+                do {
+                    RealVector deltaX = gradientProjection(matA, gradF);
+                    if (deltaX.getNorm() > c.eps2()) {
+                        vecDir = deltaX;
+                        shouldUseGradDir = false;
+                        break;
+                    }
 
-                if(VectorUtils.elementsAreLessOrEqualsZero(vecU)) {
-                    shouldUseGradDir = false;
-                } else { // антиградиент направлен за пределы допустимой области, проецируем градиент
-                    do {
-                        RealVector deltaX = gradientProjection(matA, gradF);
-                        if (deltaX.getNorm() > c.eps2()) {
-                            vecDir = deltaX;
-                            break;
+                    RealVector lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
+                            .multiply(matA)
+                            .operate(gradF)
+                            .mapMultiply(-1);
+
+                    // Все элементы больше либо равны нулю - Ура!
+                    // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
+                    if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
+                        return x;
+                    }
+
+                    // найдем индекс с минимальным лямбда
+                    int minLambdaIdx = 0;
+                    for (int i = 1; i < lambda.getDimension(); i++) {
+                        if (lambda.getEntry(i) < lambda.getEntry(minLambdaIdx)) {
+                            minLambdaIdx = i;
                         }
+                    }
 
-                        RealVector lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
-                                .multiply(matA)
-                                .operate(gradF)
-                                .mapMultiply(-1);
+                    // удалим ограничение с найденным индексом из числа активных
+                    activeConstraintsIdxes.remove(minLambdaIdx);
+                } while (activeConstraintsIdxes.size() > 0);
 
-                        // Все элементы больше либо равны нулю - Ура!
-                        // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
-                        if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
-                            return x;
-                        }
-
-                        // найдем индекс с минимальным лямбда
-                        int minLambdaIdx = 0;
-                        for (int i = 1; i < lambda.getDimension(); i++) {
-                            if (lambda.getEntry(i) < lambda.getEntry(minLambdaIdx)) {
-                                minLambdaIdx = i;
-                            }
-                        }
-
-                        // удалим ограничение с найденным индексом из числа активных
-                        activeConstraintsIdxes.remove(minLambdaIdx);
-                    } while (activeConstraintsIdxes.size() > 0);
-
-                    shouldUseGradDir = activeConstraintsIdxes.size() == 0;
-                }
+                shouldUseGradDir = activeConstraintsIdxes.size() == 0;
             }
 
-            if (!shouldUseGradDir) {
+            if (shouldUseGradDir) {
                 vecDir = gradF.mapMultiply(-1);
             }
 
-            RealVector vecDirFinal = vecDir.mapDivide(vecDir.getNorm());
+            RealVector vecDirFinal = vecDir;
             RealVector xFinal = x;
 
             double alphaConstr = findMaxAlphaSatisfyingConstraints(x, vecDir);
@@ -105,9 +104,13 @@ public class GradientProjectionMethod {
                     (alpha) -> objectiveFunc.apply(xFinal.add(vecDirFinal.mapMultiply(alpha))),
                     c.alpha0(),
                     alphaConstr,
-                    c.alphaPrecision()
+                    c.sigma()
             );
             x = x.add(vecDirFinal.mapMultiply(alphaOptimal));
+
+            if(xFinal.subtract(x).getNorm() < c.sigma() || abs(objectiveFunc.apply(x) - objectiveFunc.apply(xFinal)) < c.eps2())
+                return x;
+
         }
 
         return x;

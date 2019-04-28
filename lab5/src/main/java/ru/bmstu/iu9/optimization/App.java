@@ -57,6 +57,7 @@ public class App {
 
             RealVector x0 = gradientProjection.optimize(gradientProjectionConfig.x0());
             System.out.println(x0);
+            System.out.println(objectiveFunc.apply(x0));
 //            RealVector sol = ModifiedLagrangianMethod.optimize(
 //                    objectiveFunc,
 //                    constraints,
@@ -64,7 +65,6 @@ public class App {
 //                    dichotomyMethodConfig,
 //                    modifiedLagrangianConfig
 //            );
-//            System.out.println(gradientProjectionConfig);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -119,7 +119,7 @@ public class App {
 
     private static List<Function<RealVector, Double>> getConstraints() {
         return asList(
-                (x) -> pow(x.getEntry(0), 2.0) + pow(x.getEntry(1), 2.0) - 40.0,
+                (x) -> pow(x.getEntry(0), 2.0) + pow(x.getEntry(1), 2.0) - 0.8,
                 (x) -> -x.getEntry(0),
                 (x) -> -x.getEntry(1)
         );

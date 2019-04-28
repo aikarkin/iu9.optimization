@@ -10,6 +10,8 @@ public interface GradientProjectionConfig {
 
     double eps2();
 
+    double sigma();
+
     double alphaPrecision();
 
     int maxIterations();

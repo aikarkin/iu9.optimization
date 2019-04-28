@@ -1,7 +1,5 @@
 package ru.bmstu.iu9.optimization.od;
 
-import ru.bmstu.iu9.optimization.conf.dmc.DichotomyMethodConfig;
-
 import java.util.function.Function;
 
 import static java.lang.Math.abs;
