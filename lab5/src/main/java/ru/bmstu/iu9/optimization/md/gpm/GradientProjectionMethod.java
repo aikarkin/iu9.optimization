@@ -37,8 +37,7 @@ public class GradientProjectionMethod {
 
     public RealVector optimize(RealVector x0) {
         RealVector x = new ArrayRealVector(x0);
-        RealVector vecDir;
-        double alphaOptimal;
+        RealVector vecDir = null;
 
         for (int k = 0; k < c.maxIterations(); k++) {
             RealVector gradF = gradient.apply(x);
@@ -48,36 +47,16 @@ public class GradientProjectionMethod {
                 return x;
             }
 
-            RealVector x1 = x;
-            double alphaExt = DichotomyMethod.dichotomyMethod(
-                    (alpha) -> objectiveFunc.apply(x1.subtract(gradF.mapMultiply(alpha))),
-                    0.0,
-                    c.alphaMax(),
-                    c.alphaPrecision()
-            );
-            double alphaConstr = findMaxAlphaSatisfyingConstraints(x, gradF.mapMultiply(-1));
+            List<Integer> activeConstraintsIdxes = getActiveConstraints(x);
 
-            // не вышли за границы, продолжаем движение в направлении антиградиента
-            if (alphaExt <= alphaConstr) {
-                alphaOptimal = alphaExt;
-                vecDir = gradF.mapMultiply(-1);
-            } else { // вышли за границу, проецируем градиент
-                // перескакиваем на границу
-                x = x.subtract(gradF.mapMultiply(alphaConstr));
-                // определяем активные в точке x ограничения
-                List<Integer> activeConstraintsIdxes = new ArrayList<>();
-                for (int i = 0; i < constraints.size(); i++) {
-                    Function<RealVector, Double> constr = constraints.get(i);
-                    if (constr.apply(x) <= 0) {
-                        activeConstraintsIdxes.add(i);
-                    }
-                }
-
+            // Попали на границу
+            if (activeConstraintsIdxes.size() > 0) {
                 do {
                     RealMatrix matA = buildMatAWithConstraints(activeConstraintsIdxes, x);
-                    vecDir = gradientProjection(matA, gradF);
+                    RealVector deltaX = gradientProjection(matA, gradF);
 
-                    if (vecDir.getNorm() > c.eps2()) {
+                    if (deltaX.getNorm() > c.eps2()) {
+                        vecDir = deltaX;
                         break;
                     }
 
@@ -103,21 +82,39 @@ public class GradientProjectionMethod {
                     // удалим ограничение с найденным индексом из числа активных
                     activeConstraintsIdxes.remove(minLambdaIdx);
                 } while (activeConstraintsIdxes.size() > 0);
-
-                RealVector x2 = x;
-                alphaConstr = findMaxAlphaSatisfyingConstraints(x, gradient.apply(x).mapMultiply(-1));
-                alphaOptimal = DichotomyMethod.dichotomyMethod(
-                        (alpha) -> objectiveFunc.apply(x2.subtract(gradient.apply(x2).mapMultiply(alpha))),
-                        0.0,
-                        alphaConstr,
-                        c.alphaPrecision()
-                );
             }
 
-            x = x.add(vecDir.mapMultiply(alphaOptimal));
+            if (activeConstraintsIdxes.size() == 0) {
+                vecDir = gradF.mapMultiply(-1);
+            }
+
+            RealVector vecDirFinal = vecDir.mapDivide(vecDir.getNorm());
+            RealVector xFinal = x;
+
+            double alphaConstr = findMaxAlphaSatisfyingConstraints(x, vecDir);
+            double alphaOptimal = DichotomyMethod.dichotomyMethod(
+                    (alpha) -> objectiveFunc.apply(xFinal.add(vecDirFinal.mapMultiply(alpha))),
+                    c.alpha0(),
+                    alphaConstr,
+                    c.alphaPrecision()
+            );
+            x = x.add(vecDirFinal.mapMultiply(alphaOptimal));
         }
 
         return x;
+    }
+
+    private List<Integer> getActiveConstraints(RealVector x) {
+        List<Integer> activeConstraintsIdxes = new ArrayList<>();
+
+        for (int i = 0; i < constraints.size(); i++) {
+            double constraintValue = constraints.get(i).apply(x);
+            if (c.eps1() <= constraintValue && constraintValue <= 0) {
+                activeConstraintsIdxes.add(i);
+            }
+        }
+
+        return activeConstraintsIdxes;
     }
 
     private RealVector gradientProjection(RealMatrix matA, RealVector gradF) {
@@ -135,25 +132,18 @@ public class GradientProjectionMethod {
     }
 
     private double findMaxAlphaSatisfyingConstraints(RealVector x0, RealVector d) {
-        double alpha = c.alpha0(), alphaPrev;
+        double alpha = 0.0, alphaPrev;
+        int k = 0;
+        RealVector x;
 
-        RealVector x = x0.add(d.mapMultiply(alpha));
+        do {
+            alphaPrev = alpha;
+            alpha = pow(2.0, k);
+            x = x0.add(d.mapMultiply(alpha));
+            k++;
+        } while (satisfiesConstraints(x) > 0);
 
-        if (satisfiesConstraints(x) > 0) {
-            do {
-                x = x0.add(d.mapMultiply(alpha));
-                alpha *= 2.0;
-            } while (satisfiesConstraints(x) > 0);
-            alphaPrev = alpha / 4.0;
-        } else {
-            do {
-                x = x0.add(d.mapMultiply(alpha));
-                alpha /= 2.0;
-            } while (satisfiesConstraints(x) < 0);
-            alphaPrev = 4.0 * alpha;
-        }
-
-        double minAlpha = min(alpha, alphaPrev), maxAlpha = max(alpha, alphaPrev);
+        double minAlpha = alphaPrev, maxAlpha = alpha;
 
         while (abs(minAlpha - maxAlpha) > c.alphaPrecision()) {
             double mid = (minAlpha + maxAlpha) / 2.0;

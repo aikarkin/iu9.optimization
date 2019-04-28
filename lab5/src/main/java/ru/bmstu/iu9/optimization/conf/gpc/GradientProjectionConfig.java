@@ -16,6 +16,4 @@ public interface GradientProjectionConfig {
 
     double alpha0();
 
-    double alphaMax();
-
 }
