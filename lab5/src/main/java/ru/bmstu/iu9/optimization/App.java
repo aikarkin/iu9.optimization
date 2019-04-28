@@ -11,7 +11,14 @@ import ru.bmstu.iu9.optimization.conf.mlc.ModifiedLagrangianConfig;
 import ru.bmstu.iu9.optimization.conf.pmc.PenaltyMethodConfig;
 import ru.bmstu.iu9.optimization.conf.psc.PatternSearchConfig;
 import ru.bmstu.iu9.optimization.loader.PropertiesLoader;
+import ru.bmstu.iu9.optimization.md.OptimizationMethod;
+import ru.bmstu.iu9.optimization.md.OptimizationResult;
 import ru.bmstu.iu9.optimization.md.gpm.GradientProjectionMethod;
+import ru.bmstu.iu9.optimization.md.ml.ModifiedLagrangianMethod;
+import ru.bmstu.iu9.optimization.md.pm.CombinedPenaltyMethod;
+import ru.bmstu.iu9.optimization.md.pm.ExternalPenaltyMethod;
+import ru.bmstu.iu9.optimization.md.pm.InternalPenaltyMethod;
+import ru.bmstu.iu9.optimization.md.pm.PenaltyType;
 
 import java.io.File;
 import java.io.IOException;
@@ -33,6 +40,8 @@ public class App {
     private static ModifiedLagrangianConfig modifiedLagrangianConfig;
     private static GradientProjectionConfig gradientProjectionConfig;
 
+    private static OptimizationMethod[] optimizationMethods;
+
     public static void main(String[] args) {
         ClassLoader classLoader = App.class.getClassLoader();
         URL configUrl = classLoader.getResource(CONFIG_FILE_NAME);
@@ -45,29 +54,38 @@ public class App {
         try {
             File configFile = new File(configUrl.getFile());
             loadConfiguration(configFile);
-            // f(x, y) = 250 * (x^2 - y)^2 + 2 * (x - 1)^2 + 300
-            Function<RealVector, Double> objectiveFunc = getRosenbrock2Function();
-            GradientProjectionMethod gradientProjection = new GradientProjectionMethod(
-                    objectiveFunc,
-                    getRosenbrock2Gradient(),
-                    getConstraints(),
-                    getConstraintsDerivativeMatrix(),
-                    gradientProjectionConfig
-            );
+            initOptimizationMethods();
 
-            RealVector x0 = gradientProjection.optimize(gradientProjectionConfig.x0());
-            System.out.println(x0);
-            System.out.println(objectiveFunc.apply(x0));
-//            RealVector sol = ModifiedLagrangianMethod.optimize(
-//                    objectiveFunc,
-//                    constraints,
-//                    patternSearchConfig,
-//                    dichotomyMethodConfig,
-//                    modifiedLagrangianConfig
-//            );
+            for(OptimizationMethod optimization : optimizationMethods) {
+                System.out.println("[info] Starting optimization: " + optimization.name());
+                long start = System.currentTimeMillis();
+                OptimizationResult res = optimization.optimize();
+                long end = System.currentTimeMillis();
+                System.out.printf("[info]\t x* = %s%n", res.getVector());
+                System.out.printf("[info]\t f(x*) = %.3f%n", res.getFunctionValue());
+                System.out.printf("[info]\t iterations: %d%n", res.getTotalIterations());
+                System.out.printf("[info]\t execution time: %dms%n", end - start);
+            }
+
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private static void initOptimizationMethods() {
+        Function<RealVector, Double> objectiveFunc = getRosenbrock2Function();
+        Function<RealVector, RealVector> gradientFunc = getRosenbrock2Gradient();
+        List<Function<RealVector, Double>> constraints = getConstraints();
+        Function<RealVector, RealMatrix> activeConstraintsMatrix = getConstraintsDerivativeMatrix();
+
+        optimizationMethods = new OptimizationMethod[]{
+                new GradientProjectionMethod(objectiveFunc, gradientFunc, constraints, activeConstraintsMatrix, gradientProjectionConfig),
+                new ModifiedLagrangianMethod(objectiveFunc, constraints, patternSearchConfig, dichotomyMethodConfig, modifiedLagrangianConfig),
+                new ExternalPenaltyMethod(objectiveFunc, constraints, patternSearchConfig, dichotomyMethodConfig, penaltyMethodConfig),
+                new InternalPenaltyMethod(objectiveFunc, constraints, patternSearchConfig, dichotomyMethodConfig, penaltyMethodConfig, PenaltyType.HYPERBOLIC),
+                new InternalPenaltyMethod(objectiveFunc, constraints, patternSearchConfig, dichotomyMethodConfig, penaltyMethodConfig, PenaltyType.LOG_NEGATIVE),
+                new CombinedPenaltyMethod(objectiveFunc, constraints, patternSearchConfig, dichotomyMethodConfig, penaltyMethodConfig)
+        };
     }
 
     private static void loadConfiguration(File file) throws IOException {
@@ -87,20 +105,6 @@ public class App {
         return (vec) -> {
             double x = vec.getEntry(0), y = vec.getEntry(1);
             return a * pow(x * x - y, 2.0) + b * pow(x - 1, 2.0) + f0;
-        };
-    }
-
-    private static Function<RealVector, RealMatrix> getRosenbrock2Hesian() {
-        double a = globalConfig.rosenbrockA();
-        double b = globalConfig.rosenbrockB();
-
-        return (vec) -> {
-            double x = vec.getEntry(0), y = vec.getEntry(1);
-
-            return MatrixUtils.createRealMatrix(new double[][]{
-                    {4 * a * (x * x - y) + 8 * a * x * x + 2 * b, -4 * a * x},
-                    {- 4 * a * x, 2 * a}
-            });
         };
     }
 

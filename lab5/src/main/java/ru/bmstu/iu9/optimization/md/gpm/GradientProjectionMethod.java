@@ -6,6 +6,8 @@ import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
 import ru.bmstu.iu9.optimization.conf.gpc.GradientProjectionConfig;
 import ru.bmstu.iu9.optimization.geometry.VectorUtils;
+import ru.bmstu.iu9.optimization.md.OptimizationMethod;
+import ru.bmstu.iu9.optimization.md.OptimizationResult;
 import ru.bmstu.iu9.optimization.od.DichotomyMethod;
 
 import java.util.ArrayList;
@@ -14,7 +16,7 @@ import java.util.function.Function;
 
 import static java.lang.Math.*;
 
-public class GradientProjectionMethod {
+public class GradientProjectionMethod implements OptimizationMethod {
 
     private Function<RealVector, Double> objectiveFunc;
     private Function<RealVector, RealVector> gradient;
@@ -35,7 +37,8 @@ public class GradientProjectionMethod {
         this.c = c;
     }
 
-    public RealVector optimize(RealVector x0) {
+    @Override
+    public OptimizationResult optimize(RealVector x0) {
         RealVector x = new ArrayRealVector(x0);
         RealVector vecDir = null;
         boolean shouldUseGradDir;
@@ -47,7 +50,7 @@ public class GradientProjectionMethod {
 
             // если норма градиента стала слишком маленькой, выходим
             if ((gradF.getNorm() < c.eps2())) {
-                return x;
+                return new OptimizationResult(x, objectiveFunc.apply(x), k);
             }
 
             gradF.unitize();
@@ -74,7 +77,7 @@ public class GradientProjectionMethod {
                     // Все элементы больше либо равны нулю - Ура!
                     // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
                     if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
-                        return x;
+                        return new OptimizationResult(x, objectiveFunc.apply(x), k);
                     }
 
                     // найдем индекс с минимальным лямбда
@@ -109,11 +112,11 @@ public class GradientProjectionMethod {
             x = x.add(vecDirFinal.mapMultiply(alphaOptimal));
 
             if(xFinal.subtract(x).getNorm() < c.sigma() || abs(objectiveFunc.apply(x) - objectiveFunc.apply(xFinal)) < c.eps2())
-                return x;
+                return new OptimizationResult(x, objectiveFunc.apply(x), k);
 
         }
 
-        return x;
+        return new OptimizationResult(x, objectiveFunc.apply(x), k);
     }
 
     private List<Integer> getActiveConstraints(RealVector x) {
@@ -183,6 +186,11 @@ public class GradientProjectionMethod {
         return constraints.stream()
                 .map(g -> g.apply(x))
                 .allMatch(val -> val <= 0) ? 1 : -1;
+    }
+
+    @Override
+    public OptimizationResult optimize() {
+        return optimize(c.x0());
     }
 
 }

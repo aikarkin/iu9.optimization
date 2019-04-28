@@ -4,21 +4,29 @@ import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealVector;
 import ru.bmstu.iu9.optimization.conf.dmc.DichotomyMethodConfig;
 import ru.bmstu.iu9.optimization.conf.psc.PatternSearchConfig;
+import ru.bmstu.iu9.optimization.md.OptimizationMethod;
+import ru.bmstu.iu9.optimization.md.OptimizationResult;
 
 import java.util.Arrays;
 import java.util.function.Function;
 
 import static ru.bmstu.iu9.optimization.od.DichotomyMethod.dichotomyMethod;
 
-public class PatternSearch {
+public class PatternSearch implements OptimizationMethod {
 
-    public static RealVector patternSearch(
-            Function<RealVector, Double> objectiveFunc,
-            RealVector x,
-            PatternSearchConfig c,
-            DichotomyMethodConfig dmc
-    ) {
-        RealVector x1 = MatrixUtils.createRealVector(x.toArray()), x2;
+    private PatternSearchConfig c;
+    private DichotomyMethodConfig dmc;
+    private Function<RealVector, Double> objectiveFunc;
+
+    public PatternSearch(Function<RealVector, Double> objectiveFunc, PatternSearchConfig c, DichotomyMethodConfig dmc) {
+        this.objectiveFunc = objectiveFunc;
+        this.c = c;
+        this.dmc = dmc;
+    }
+
+    @Override
+    public OptimizationResult optimize(RealVector x0) {
+        RealVector x1 = MatrixUtils.createRealVector(x0.toArray()), x2;
         double[] steps = Arrays.copyOf(c.steps(), c.steps().length);
         boolean terminate;
         int k = 0;
@@ -26,7 +34,7 @@ public class PatternSearch {
         do {
             k++;
             terminate = true;
-            ExploringSearchRes esRes = exploringSearch(objectiveFunc, x1, steps);
+            ExploringSearchRes esRes = exploringSearch(x1, steps);
             x2 = esRes.x;
             if (esRes.succeed) {
                 RealVector d = x2.subtract(x1);
@@ -56,14 +64,15 @@ public class PatternSearch {
 
         System.out.printf("[info]\t\t-> Число итераций: %d%n", k);
 
-        return x1;
+        return new OptimizationResult(x1, objectiveFunc.apply(x1), k);
     }
 
-    private static ExploringSearchRes exploringSearch(
-            Function<RealVector, Double> objectiveFunc,
-            RealVector x,
-            double[] steps
-    ) {
+    @Override
+    public OptimizationResult optimize() {
+        return optimize(MatrixUtils.createRealVector(new double[]{0.0, 0.0}));
+    }
+
+    private ExploringSearchRes exploringSearch(RealVector x, double[] steps) {
         int n = x.getDimension();
         RealVector x1 = MatrixUtils.createRealVector(x.toArray());
 
