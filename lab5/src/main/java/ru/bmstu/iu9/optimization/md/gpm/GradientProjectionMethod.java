@@ -38,9 +38,11 @@ public class GradientProjectionMethod {
     public RealVector optimize(RealVector x0) {
         RealVector x = new ArrayRealVector(x0);
         RealVector vecDir = null;
+        boolean shouldUseGradDir;
 
         for (int k = 0; k < c.maxIterations(); k++) {
             RealVector gradF = gradient.apply(x);
+            shouldUseGradDir = false;
 
             // если норма градиента стала слишком маленькой, выходим
             if (gradF.getNorm() < c.eps2()) {
@@ -51,40 +53,47 @@ public class GradientProjectionMethod {
 
             // Попали на границу
             if (activeConstraintsIdxes.size() > 0) {
-                do {
-                    RealMatrix matA = buildMatAWithConstraints(activeConstraintsIdxes, x);
-                    RealVector deltaX = gradientProjection(matA, gradF);
+                RealMatrix matA = buildMatAWithConstraints(activeConstraintsIdxes, x);
+                RealVector vecU = matA.operate(gradF.mapMultiply(-1));
 
-                    if (deltaX.getNorm() > c.eps2()) {
-                        vecDir = deltaX;
-                        break;
-                    }
-
-                    RealVector lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
-                            .multiply(matA)
-                            .operate(gradF)
-                            .mapMultiply(-1);
-
-                    // Все элементы больше либо равны нулю - Ура!
-                    // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
-                    if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
-                        return x;
-                    }
-
-                    // найдем индекс с минимальным лямбда
-                    int minLambdaIdx = 0;
-                    for (int i = 1; i < lambda.getDimension(); i++) {
-                        if (lambda.getEntry(i) < lambda.getEntry(minLambdaIdx)) {
-                            minLambdaIdx = i;
+                if(VectorUtils.elementsAreLessOrEqualsZero(vecU)) {
+                    shouldUseGradDir = false;
+                } else { // антиградиент направлен за пределы допустимой области, проецируем градиент
+                    do {
+                        RealVector deltaX = gradientProjection(matA, gradF);
+                        if (deltaX.getNorm() > c.eps2()) {
+                            vecDir = deltaX;
+                            break;
                         }
-                    }
 
-                    // удалим ограничение с найденным индексом из числа активных
-                    activeConstraintsIdxes.remove(minLambdaIdx);
-                } while (activeConstraintsIdxes.size() > 0);
+                        RealVector lambda = MatrixUtils.inverse(matA.multiply(matA.transpose()))
+                                .multiply(matA)
+                                .operate(gradF)
+                                .mapMultiply(-1);
+
+                        // Все элементы больше либо равны нулю - Ура!
+                        // Похоже искомая точка найдена, следует проверить достаточные условия экстремума
+                        if (VectorUtils.elementsAreGreaterOrEqualsZero(lambda)) {
+                            return x;
+                        }
+
+                        // найдем индекс с минимальным лямбда
+                        int minLambdaIdx = 0;
+                        for (int i = 1; i < lambda.getDimension(); i++) {
+                            if (lambda.getEntry(i) < lambda.getEntry(minLambdaIdx)) {
+                                minLambdaIdx = i;
+                            }
+                        }
+
+                        // удалим ограничение с найденным индексом из числа активных
+                        activeConstraintsIdxes.remove(minLambdaIdx);
+                    } while (activeConstraintsIdxes.size() > 0);
+
+                    shouldUseGradDir = activeConstraintsIdxes.size() == 0;
+                }
             }
 
-            if (activeConstraintsIdxes.size() == 0) {
+            if (!shouldUseGradDir) {
                 vecDir = gradF.mapMultiply(-1);
             }
 
